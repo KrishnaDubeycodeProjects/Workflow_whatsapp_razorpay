@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 // Razorpay server-to-server webhook (safety net).
 // Confirms bookings even if the customer closes the browser before
 // /api/verify-payment runs. Configure in Razorpay Dashboard → Webhooks:
-//   URL:    <NEXT_PUBLIC_APP_URL>/api/razorpay/webhook
+//   URL:    <NEXT_PUBLIC_APP_URL>/api/payments/webhook  (Razorpay rejects URLs containing "razorpay")
 //   Secret: RAZORPAY_WEBHOOK_SECRET
 //   Events: payment.captured, order.paid, payment.failed
 // Finalisation is idempotent, so a webhook racing the browser never double-sends.
