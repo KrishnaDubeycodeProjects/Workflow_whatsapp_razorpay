@@ -3,13 +3,27 @@
 import React, { useState } from "react";
 import { Eye, EyeOff, Lock, Loader2, AlertCircle, ArrowRight } from "lucide-react";
 
-export default function LoginForm({ next, configured }: { next: string; configured: boolean }) {
+export default function LoginForm({
+  next,
+  configured,
+  reason,
+}: {
+  next: string;
+  configured: boolean;
+  reason?: "idle" | "expired";
+}) {
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(
     configured ? null : "Admin login isn't configured yet. Set ADMIN_PASSWORD in the server environment."
   );
+  const notice =
+    reason === "idle"
+      ? "You were signed out after 30 minutes of inactivity."
+      : reason === "expired"
+      ? "Your session has expired. Please sign in again."
+      : null;
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,6 +87,10 @@ export default function LoginForm({ next, configured }: { next: string; configur
         </div>
       </div>
 
+      {notice && !error && (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">{notice}</p>
+      )}
+
       <div aria-live="polite" className="min-h-0">
         {error && (
           <p
@@ -102,7 +120,7 @@ export default function LoginForm({ next, configured }: { next: string; configur
       </button>
 
       <p className="text-[11px] leading-relaxed text-stone-400 text-center">
-        Sessions expire after 12 hours. Customer data on this desk is confidential.
+        You are signed out after 30 minutes of inactivity, or 12 hours after signing in. Customer data on this desk is confidential.
       </p>
     </form>
   );

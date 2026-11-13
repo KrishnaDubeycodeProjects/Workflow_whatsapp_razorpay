@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
+import SessionGuard from "@/components/admin/SessionGuard";
 import {
   Activity,
   MessageSquare,
@@ -96,10 +97,13 @@ export default function AdminDashboard() {
   };
 
   // Authenticated fetch: if the admin session has expired, send the user back to sign in.
-  const adminFetch = async (input: string, init?: RequestInit) => {
-    const res = await fetch(input, init);
+  // `background` requests (auto-refresh) never extend the idle session window.
+  const adminFetch = async (input: string, init?: RequestInit, background = false) => {
+    const headers = new Headers(init?.headers);
+    if (background) headers.set("x-gec-background", "1");
+    const res = await fetch(input, { ...init, headers });
     if (res.status === 401) {
-      window.location.assign("/login?next=/admin");
+      window.location.assign("/login?reason=expired&next=/admin");
       throw new Error("Session expired. Redirecting to sign in…");
     }
     return res;
@@ -113,10 +117,10 @@ export default function AdminDashboard() {
   };
 
   // Fetch all live data from Neon PostgreSQL (ZERO mock data)
-  const fetchDbData = async () => {
+  const fetchDbData = async (background = false) => {
     try {
       setLoading(true);
-      const res = await adminFetch("/api/admin/data");
+      const res = await adminFetch("/api/admin/data", undefined, background);
       const json = await res.json();
       if (json.success && json.data) {
         setKpis(json.data.kpis || {});
@@ -150,7 +154,7 @@ export default function AdminDashboard() {
   useEffect(() => {
     fetchDbData();
     // Auto-sync with Neon DB every 20 seconds
-    const interval = setInterval(fetchDbData, 20000);
+    const interval = setInterval(() => fetchDbData(true), 20000);
     return () => clearInterval(interval);
   }, []);
 
@@ -329,6 +333,7 @@ export default function AdminDashboard() {
 
   return (
     <div className="flex flex-col lg:flex-row h-screen w-full bg-[#FBFBFA] text-stone-900 font-sans selection:bg-amber-100 selection:text-amber-900 overflow-hidden">
+      <SessionGuard />
       {/* =========================================================================
           1. DESKTOP SIDEBAR NAVIGATION (Hidden on mobile)
       ========================================================================== */}
@@ -491,7 +496,7 @@ export default function AdminDashboard() {
           )}
 
           <button
-            onClick={fetchDbData}
+            onClick={() => fetchDbData()}
             title="Refresh Registry"
             className="p-2 rounded-xl bg-stone-50 text-stone-700 hover:bg-stone-100 border border-stone-200 transition"
           >
@@ -626,7 +631,7 @@ export default function AdminDashboard() {
 
           <div className="flex items-center gap-3">
             <button
-              onClick={fetchDbData}
+              onClick={() => fetchDbData()}
               title="Sync Registry"
               className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-stone-50 hover:bg-stone-100 text-xs font-semibold text-stone-700 border border-stone-200 transition shadow-xs"
             >
@@ -676,7 +681,7 @@ export default function AdminDashboard() {
               <ShieldAlert className="h-4 w-4 shrink-0 text-red-600" />
               <span>Connection Notice: {error}</span>
             </div>
-            <button onClick={fetchDbData} className="underline text-red-700 font-bold ml-2">
+            <button onClick={() => fetchDbData()} className="underline text-red-700 font-bold ml-2">
               Retry
             </button>
           </div>

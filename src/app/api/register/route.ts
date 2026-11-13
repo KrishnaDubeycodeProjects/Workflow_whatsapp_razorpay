@@ -4,6 +4,7 @@ import { extendHold, getOrderContext, HOLD_MINUTES_PAYMENT, normalizePhone, UUID
 import { postToN8n } from "@/lib/n8n";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { sendCtaUrlMessage } from "@/lib/whatsapp";
+import { ageOn, validateRegistration } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
@@ -22,12 +23,6 @@ function toLevelEnum(input: unknown): "Beginner" | "Intermediate" | "Advanced" {
   if (s.startsWith("int") || s.startsWith("exp")) return "Intermediate";
   return "Beginner";
 }
-function ageOn(dob: Date, today = new Date()): number {
-  let age = today.getFullYear() - dob.getFullYear();
-  const m = today.getMonth() - dob.getMonth();
-  if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
-  return age;
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // Rider registration & safety waiver.
@@ -41,11 +36,9 @@ export async function POST(req: NextRequest) {
   if (wait) return NextResponse.json({ error: "Too many submissions. Please wait a few minutes." }, { status: 429 });
 
   try {
-    const data = await req.json().catch(() => ({}));
+    const body = await req.json().catch(() => null);
+    const data: Record<string, any> = body && typeof body === "object" && !Array.isArray(body) ? body : {};
     const str = (v: unknown, max = 200) => String(v ?? "").trim().replace(/\s+/g, " ").slice(0, max);
-
-    const cleanFullName = str(data.fullName, 150);
-    if (cleanFullName.length < 2) return NextResponse.json({ error: "Please provide a valid full name." }, { status: 400 });
 
     const orderId = UUID_RE.test(String(data.orderId || "")) ? String(data.orderId) : "";
     const ctx = orderId ? await getOrderContext(orderId) : null;
@@ -53,57 +46,41 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "This booking link has expired. Please start a new booking on WhatsApp." }, { status: 404 });
     }
 
+    // A WhatsApp booking may carry a non-Indian number: an exact match with the order's own number is accepted.
     const typedDigits = String(data.mobileNumber || "").replace(/\D/g, "");
-    const cleanMobile =
-      ctx && ctx.whatsapp_number.replace(/\D/g, "") === typedDigits ? ctx.whatsapp_number : normalizePhone(data.mobileNumber);
-    if (!cleanMobile) return NextResponse.json({ error: "Please provide a valid 10-digit mobile number." }, { status: 400 });
+    const phoneVerified = Boolean(ctx && ctx.whatsapp_number.replace(/\D/g, "") === typedDigits);
+
+    // Same rules the form shows inline (src/lib/validation.ts).
+    const fieldErrors = validateRegistration(data, { phoneVerified });
+    if (Object.keys(fieldErrors).length) {
+      return NextResponse.json(
+        { error: Object.values(fieldErrors)[0] || "Please check the highlighted fields.", fieldErrors },
+        { status: 400 }
+      );
+    }
+
+    const cleanFullName = str(data.fullName, 150);
+    const cleanMobile = phoneVerified ? ctx!.whatsapp_number : normalizePhone(data.mobileNumber);
+    if (!cleanMobile) {
+      return NextResponse.json({ error: "Please provide a valid 10-digit mobile number.", fieldErrors: { mobileNumber: "Enter a 10-digit mobile number." } }, { status: 400 });
+    }
     if (ctx && ctx.whatsapp_number !== cleanMobile) {
       return NextResponse.json(
-        { error: "Please use the same WhatsApp number this booking was made from." },
+        { error: "Please use the same WhatsApp number this booking was made from.", fieldErrors: { mobileNumber: "Use the WhatsApp number this booking was made from." } },
         { status: 403 }
       );
     }
 
-    const dob = new Date(`${String(data.dateOfBirth || "")}T00:00:00Z`);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(data.dateOfBirth || "")) || Number.isNaN(dob.getTime())) {
-      return NextResponse.json({ error: "Please provide the rider's date of birth." }, { status: 400 });
-    }
-    const age = ageOn(dob);
-    if (age < 4 || age > 100) {
-      return NextResponse.json({ error: "Please check the date of birth (riders must be at least 4 years old)." }, { status: 400 });
-    }
+    const age = ageOn(String(data.dateOfBirth))!;
     const isMinor = age < 18;
     const guardianName = str(data.guardianName, 100);
-    if (isMinor && guardianName.length < 2) {
-      return NextResponse.json({ error: "The rider is under 18: a parent or guardian name is mandatory." }, { status: 400 });
-    }
-
     const cleanEmergencyPerson = str(data.emergencyContactPerson, 100);
-    if (cleanEmergencyPerson.length < 2) {
-      return NextResponse.json({ error: "Please provide an emergency contact person name." }, { status: 400 });
-    }
-    const cleanEmergencyPhone = normalizePhone(data.emergencyContactNumber);
-    if (!cleanEmergencyPhone) {
-      return NextResponse.json({ error: "Please provide a valid 10-digit emergency contact phone number." }, { status: 400 });
-    }
+    const cleanEmergencyPhone = normalizePhone(data.emergencyContactNumber)!;
     if (cleanMobile === cleanEmergencyPhone) {
-      return NextResponse.json({ error: "Emergency contact number must be different from the rider's phone number." }, { status: 400 });
-    }
-    if (!data.medicalFitnessConfirmed || !data.safetyRulesAcknowledged || !data.indemnityAccepted) {
-      return NextResponse.json({ error: "You must acknowledge and accept all safety and indemnity declarations." }, { status: 400 });
+      return NextResponse.json({ error: "Emergency contact number must be different from the rider's phone number.", fieldErrors: { emergencyContactNumber: "Use a different number from the rider's own." } }, { status: 400 });
     }
     const cleanSignature = str(data.digitalSignatureName, 150);
-    if (cleanSignature.length < 2) {
-      return NextResponse.json({ error: "Please type your full legal name as digital signature." }, { status: 400 });
-    }
-    const email = str(data.email, 100);
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return NextResponse.json({ error: "Please enter a valid email address or leave it empty." }, { status: 400 });
-    }
-    const num = (v: unknown, lo: number, hi: number) => {
-      const n = parseFloat(String(v ?? ""));
-      return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : null;
-    };
+    const email = str(data.email, 100).toLowerCase();
     const activity = toActivityEnum(data.activity || ctx?.service_title);
     const level = toLevelEnum(data.level);
 
@@ -133,17 +110,17 @@ export async function POST(req: NextRequest) {
         activity,
         level,
         cleanFullName,
-        str(data.address, 500) || "N/A",
+        str(data.address, 300),
         cleanMobile,
         email || null,
-        str(data.occupation, 100) || null,
+        str(data.occupation, 60),
         String(data.dateOfBirth),
-        num(data.heightCm, 50, 250),
-        num(data.weightKg, 15, 150),
-        str(data.bloodGroup, 10) || null,
+        Number(data.heightCm),
+        Number(data.weightKg),
+        str(data.bloodGroup, 10),
         cleanEmergencyPerson,
         cleanEmergencyPhone,
-        str(data.familyPhysician, 100) || null,
+        str(data.familyPhysician, 100),
         isMinor,
         isMinor ? guardianName : null,
       ]
@@ -155,7 +132,7 @@ export async function POST(req: NextRequest) {
         registration_id, customer_id, medical_fitness_confirmed, safety_rules_acknowledged,
         indemnity_accepted, media_consent_granted, digital_signature_name, digital_signature_date
       ) VALUES ($1, $2, TRUE, TRUE, TRUE, $3, $4, CURRENT_DATE);`,
-      [registrationId, customerId, Boolean(data.mediaConsentGranted), cleanSignature]
+      [registrationId, customerId, data.mediaConsentGranted === true, cleanSignature]
     );
 
     // 3. Booking: link the waiver, advance + extend the slot hold, move the chat to "payment pending".

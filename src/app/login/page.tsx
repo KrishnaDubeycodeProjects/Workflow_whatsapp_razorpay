@@ -40,7 +40,11 @@ export default async function LoginPage({
         </div>
 
         <div className="rounded-2xl border border-stone-200/90 bg-white/95 backdrop-blur-xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_12px_32px_-12px_rgba(68,64,60,0.18)] p-6 sm:p-7">
-          <LoginForm next={safeNext(params.next)} configured={configured} />
+          <LoginForm
+            next={safeNext(params.next)}
+            configured={configured}
+            reason={params.reason === "idle" ? "idle" : params.reason === "expired" ? "expired" : undefined}
+          />
         </div>
 
         <p className="mt-6 text-center text-xs text-stone-500">

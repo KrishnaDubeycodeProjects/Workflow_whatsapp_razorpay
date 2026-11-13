@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { nameError } from "@/lib/validation";
 import { query } from "@/lib/db";
 import {
   extendHold,
@@ -41,8 +42,9 @@ export async function POST(req: NextRequest) {
     const { serviceCode, customerName, whatsappNumber, participantsCount, orderId: passedOrderId, slotId } = body;
 
     const name = String(customerName || "").trim().replace(/\s+/g, " ");
-    if (name.length < 2 || name.length > 100) {
-      return NextResponse.json({ error: "Please enter a valid full name (minimum 2 characters)." }, { status: 400 });
+    const nameProblem = nameError(name, "full name");
+    if (nameProblem) {
+      return NextResponse.json({ error: nameProblem, code: "BAD_NAME" }, { status: 400 });
     }
     if (passedOrderId && !UUID_RE.test(String(passedOrderId))) {
       return NextResponse.json({ error: "Invalid booking reference. Please restart checkout.", code: "BAD_ORDER" }, { status: 400 });
@@ -134,7 +136,7 @@ export async function POST(req: NextRequest) {
     const holdStatus = ctx.has_registration ? "PENDING_PAYMENT" : "PENDING_REGISTRATION";
     const holdMinutes = ctx.has_registration ? HOLD_MINUTES_PAYMENT : HOLD_MINUTES_REGISTRATION;
     const wantedSlot: string | null = slotId ? String(slotId) : ctx.booking?.is_future ? ctx.booking.slot_id : null;
-    let slotInfo: { displayDate: string; startTime: string; endTime: string } | null = null;
+    let slotInfo: { displayDate: string; startTime: string; endTime: string; holdExpiresAt?: string } | null = null;
 
     if (!slotId && isLiveHold(ctx) && ctx.booking?.is_future) {
       await extendHold(orderId, holdMinutes, ctx.has_registration ? "PENDING_PAYMENT" : undefined);
@@ -163,6 +165,8 @@ export async function POST(req: NextRequest) {
     } else {
       return NextResponse.json({ error: "Please choose a date and time for your ride.", code: "SLOT_REQUIRED", orderId }, { status: 409 });
     }
+
+    if (slotInfo) slotInfo.holdExpiresAt = new Date(Date.now() + holdMinutes * 60_000).toISOString();
 
     // 5. Waiver gate (the slot stays held while the rider signs it).
     if (!ctx.has_registration) {
